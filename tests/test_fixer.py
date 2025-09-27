@@ -137,6 +137,35 @@ def test_get_state_context_returns_neighbors(fixer):
     assert all(row["state_id"] > state_id for row in after_rows)
 
 
+def test_get_state_deletion_preview_returns_sample_rows(fixer):
+    preview = fixer.get_state_deletion_preview(
+        "binary_sensor.fritzbox_pia_verbindung",
+        "on",
+        sample_limit=3,
+    )
+
+    assert preview is not None
+    assert preview.states_count > 0
+    assert 0 < len(preview.examples) <= 3
+    assert preview.total >= preview.states_count
+
+
+def test_get_state_deletion_preview_includes_statistics_counts(fixer):
+    preview = fixer.get_state_deletion_preview(
+        "sensor.heizung_wohnzimmer_batterie",
+        "72.0",
+        sample_limit=2,
+    )
+
+    assert preview is not None
+    assert preview.states_count > 0
+    assert len(preview.examples) <= 2
+    assert (
+        preview.statistics_count > 0
+        or preview.statistics_short_term_count > 0
+    )
+
+
 def test_delete_state_everywhere_removes_matching_states(fixer, fresh_db_path):
     entity_id = "binary_sensor.fritzbox_pia_verbindung"
     state_value = "on"

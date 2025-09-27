@@ -26,6 +26,30 @@ class DeletionSummary:
 
 
 @dataclass(frozen=True)
+class StateDeletionPreview:
+    """Summary of rows that would be removed by deleting a state value."""
+
+    states_count: int = 0
+    statistics_count: int = 0
+    statistics_short_term_count: int = 0
+    first_seen_ts: float | None = None
+    last_seen_ts: float | None = None
+    first_seen: str | None = None
+    last_seen: str | None = None
+    examples: tuple[sqlite3.Row, ...] = ()
+
+    @property
+    def total(self) -> int:
+        """Return the total number of rows that would be removed."""
+
+        return (
+            self.states_count
+            + self.statistics_count
+            + self.statistics_short_term_count
+        )
+
+
+@dataclass(frozen=True)
 class ValueStatistics:
     """Aggregated information for a sensor state value."""
 
@@ -166,6 +190,98 @@ class RecorderFixer:
         except sqlite3.DatabaseError:
             self.conn.rollback()
             raise
+
+    def get_state_deletion_preview(
+        self, entity_id: str, state_value: str, *, sample_limit: int = 5
+    ) -> StateDeletionPreview | None:
+        """Return a summary of rows that would be deleted for ``state_value``."""
+
+        metadata_id = self.get_metadata_id(entity_id)
+        if metadata_id is None:
+            return None
+
+        summary_cursor = self.conn.execute(
+            """
+            SELECT
+                COUNT(*) AS count,
+                MIN(last_updated_ts) AS first_seen_ts,
+                MAX(last_updated_ts) AS last_seen_ts,
+                MIN(last_updated) AS first_seen,
+                MAX(last_updated) AS last_seen
+            FROM states
+            WHERE metadata_id = ? AND state = ?
+            """,
+            (metadata_id, state_value),
+        )
+        summary_row = summary_cursor.fetchone()
+
+        states_count = int(summary_row["count"]) if summary_row and summary_row["count"] else 0
+        first_seen_ts = (
+            float(summary_row["first_seen_ts"])
+            if summary_row and summary_row["first_seen_ts"] is not None
+            else None
+        )
+        last_seen_ts = (
+            float(summary_row["last_seen_ts"])
+            if summary_row and summary_row["last_seen_ts"] is not None
+            else None
+        )
+        first_seen = summary_row["first_seen"] if summary_row else None
+        last_seen = summary_row["last_seen"] if summary_row else None
+
+        sample_cursor = self.conn.execute(
+            """
+            SELECT state_id, state, last_updated, last_updated_ts
+            FROM states
+            WHERE metadata_id = ? AND state = ?
+            ORDER BY COALESCE(last_updated_ts, 0) DESC
+            LIMIT ?
+            """,
+            (metadata_id, state_value, sample_limit),
+        )
+        examples = tuple(sample_cursor.fetchall())
+
+        statistics_metadata_id = self.get_statistic_id(entity_id)
+        numeric_value = self._coerce_state_to_float(state_value)
+
+        statistics_count = 0
+        statistics_short_term_count = 0
+
+        if statistics_metadata_id is not None and numeric_value is not None:
+            for table_name in ("statistics", "statistics_short_term"):
+                cursor = self.conn.execute(
+                    f"""
+                    SELECT COUNT(*) AS count
+                    FROM {table_name}
+                    WHERE metadata_id = ? AND (
+                        state = ? OR min = ? OR max = ? OR mean = ?
+                    )
+                    """,
+                    (
+                        statistics_metadata_id,
+                        numeric_value,
+                        numeric_value,
+                        numeric_value,
+                        numeric_value,
+                    ),
+                )
+                count = cursor.fetchone()["count"]
+
+                if table_name == "statistics":
+                    statistics_count = int(count)
+                else:
+                    statistics_short_term_count = int(count)
+
+        return StateDeletionPreview(
+            states_count=states_count,
+            statistics_count=statistics_count,
+            statistics_short_term_count=statistics_short_term_count,
+            first_seen_ts=first_seen_ts,
+            last_seen_ts=last_seen_ts,
+            first_seen=first_seen,
+            last_seen=last_seen,
+            examples=examples,
+        )
 
     def delete_state_by_id(self, entity_id: str, state_id: int) -> bool:
         """Delete a single ``states`` row identified by ``state_id``."""
