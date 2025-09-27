@@ -6,7 +6,6 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import NestedCompleter
 from fixer import RecorderFixer
 import subprocess
-import getpass
 
 DEFAULT_DB_PATH = "/config/home-assistant_v2.db"
 
@@ -59,31 +58,12 @@ def initialize_fixer(db_path):
 
 def change_debug_password():
     print("Change password for user 'debug':")
-    while True:
-        pwd1 = getpass.getpass("Enter new password: ")
-        pwd2 = getpass.getpass("Confirm new password: ")
-        if pwd1 != pwd2:
-            print("Passwords do not match. Please try again.")
-        elif pwd1 == "":
-            print("Password cannot be empty. Please try again.")
-        else:
-            break
+    print("You will be prompted by the system 'passwd' tool.")
     try:
-        # Pass the password to chpasswd via stdin
-        proc = subprocess.run(
-            ["chpasswd"],
-            input=f"debug:{pwd1}",
-            encoding="utf-8",
-            check=True,
-            capture_output=True,
-        )
+        subprocess.run(["passwd"], check=True)
         print("Password successfully changed for user 'debug'.")
-    except subprocess.CalledProcessError as e:
-        print("Failed to change password:")
-        if e.stderr:
-            print(e.stderr)
-        else:
-            print(str(e))
+    except subprocess.CalledProcessError:
+        print("Failed to change password. Please review the messages above and try again.")
 
 def main():
     warning = """

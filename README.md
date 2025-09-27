@@ -1,7 +1,11 @@
 # Home Assistant Recorder DB Editor (CLI)
 
-🔧 **A command-line tool for direct editing of Home Assistant's `home-assistant_v2.db` SQLite database.**  
+🔧 **A command-line tool for direct editing of Home Assistant's `home-assistant_v2.db` SQLite database.**
 Primarily used to clean up unwanted sensor values — including all traces from `states`, `statistics`, and `statistics_short_term` — so they disappear even from mini-graphs.
+
+> ℹ️ **Fork notice:** This project is a fork of
+> [`mamontuka/ha-recorder-db-editor`](https://github.com/mamontuka/ha-recorder-db-editor).
+> The goal of this fork is to keep the code accessible for experimentation with Codex tooling.
 
 ---
 
@@ -12,21 +16,22 @@ This add-on **does NOT provide backup or restore functionality**, and is **not r
 
 ## 🔧 Installation
 
-1. Add this repo to **Home Assistant Add-on Store**  
-   📍 `https://github.com/mamontuka/ha-recorder-db-editor`
+1. Add this repository to the **Home Assistant Add-on Store** using `https://github.com/Duelion/ha-recorder-db-editor`.
 2. Install the **Home Assistant Recorder DB Editor**
 
 ### ✅ Enable Shell Access
 
 1. Go to **Home Assistant > Settings > Add-ons > Home Assistant Recorder DB Editor**.
 2. Open the **Configuration** tab.
-3. Enable the following option (if disabled):
+3. Enable the following option (if disabled) **and set a strong password**:
 
 ```yaml
 enable_debug_shell: true
+debug_password: "<CHOOSE_A_STRONG_PASSWORD>"
 ```
 
 4. Save and restart the add-on.
+5. Change the password regularly from inside the CLI using the `password` command.
 
 ### 🔐 Connect via SSH Client
 
@@ -37,8 +42,10 @@ ssh debug@<HOME_ASSISTANT_IP> -p <EXPOSED_PORT>
 ```
 
 - **Username:** `debug`
-- **Password:** `debug` (can be changed in the shell)
+- **Password:** value from `debug_password` in the add-on configuration
 - **Port:** must be mapped in your add-on or container settings
+
+> ℹ️ **Docker Compose users:** copy `options.example.json` to `options.json`, set `enable_debug_shell` and `debug_password`, and mount it to `/data/options.json` (read-only) as shown in `docker-compose.yaml`.
 
 ---
 
@@ -116,6 +123,7 @@ Deleted 2 entries from statistics_short_term.
 
 ## 🧠 Notes
 
+- The SSH debug shell is disabled by default. You must explicitly enable it and set `debug_password` in the add-on configuration before remote access is allowed.
 - If values still show up on mini-graphs after deletion, check `statistics_short_term` entries — especially `min`, `max`, `mean`.
 - Restart Home Assistant after modifications to ensure the frontend reflects the changes.
 

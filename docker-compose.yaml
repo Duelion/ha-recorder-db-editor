@@ -4,10 +4,8 @@ services:
     build: 
       context: .
     restart: unless-stopped
-    privileged: true
     ports:
       - "2233:2233"
     volumes:
-      - ./config.yaml:/config.yaml
+      - ./options.json:/data/options.json:ro
       - ${PWD}:/config
-      - /dev:/dev

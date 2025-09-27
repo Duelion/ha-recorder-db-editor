@@ -1,5 +1,7 @@
 #!/bin/bash
-set -e
+set -euo pipefail
+
+umask 077
 
 echo "Homeassistant Recorder Database Editor"
 
@@ -13,18 +15,35 @@ for keytype in rsa ecdsa ed25519; do
   fi
 done
 
-ln -sf /config /home/debug/config
-chown -h debug:debug /home/debug/config || true
-chown -R debug:debug /home/debug/config || true
+if [ ! -e /home/debug/config ]; then
+  ln -s /config /home/debug/config
+fi
+chown -h debug:debug /home/debug/config 2>/dev/null || true
 
 CONFIG_PATH="/data/options.json"
-SSH_ENABLED=$(jq -r '.enable_debug_shell // false' "$CONFIG_PATH")
 SSH_PORT="${HASSIO_HOST_NETWORK_2233_TCP_PORT:-2233}"
 
+SSH_ENABLED="false"
+CONFIGURED_PASSWORD=""
+
+if [ -f "$CONFIG_PATH" ]; then
+  SSH_ENABLED=$(jq -r '(.enable_debug_shell // false) | tostring' "$CONFIG_PATH" 2>/dev/null || echo "false")
+  CONFIGURED_PASSWORD=$(jq -r '.debug_password // ""' "$CONFIG_PATH" 2>/dev/null || echo "")
+fi
+
+if [ -z "$CONFIGURED_PASSWORD" ] && [ -n "${DEBUG_PASSWORD:-}" ]; then
+  CONFIGURED_PASSWORD="$DEBUG_PASSWORD"
+fi
+
 if [ "$SSH_ENABLED" = "true" ]; then
-    echo "[INFO] SSH debug shell enabled"
-    # Run dropbear as user debug in the background
-    sudo -u debug /usr/sbin/dropbear -E -p "$SSH_PORT" &
+    if [ -z "$CONFIGURED_PASSWORD" ]; then
+        echo "[ERROR] enable_debug_shell is true but no debug_password provided. SSH access will remain disabled."
+    else
+        echo "[INFO] SSH debug shell enabled"
+        echo "debug:${CONFIGURED_PASSWORD}" | chpasswd
+        unset CONFIGURED_PASSWORD DEBUG_PASSWORD
+        /usr/sbin/dropbear -E -w -p "$SSH_PORT" &
+    fi
 else
     echo "[INFO] SSH debug shell is disabled"
 fi
