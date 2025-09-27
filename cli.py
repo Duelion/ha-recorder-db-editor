@@ -44,8 +44,9 @@ HELP_TEXT = textwrap.dedent(
 
       sensor list_all                    - List all sensors with their metadata_id
       sensor find <entity_id>            - Show metadata_id + quick state preview
-      sensor values <entity_id>          - Show all unique state values of a sensor
+      sensor values <entity_id>          - Show value counts and last seen timestamps
       sensor raw <entity_id>             - Show last 200 raw records for a sensor
+      sensor inspect <entity_id>         - Summarise metadata + recent activity
       sensor find_value <entity_id> <value> [tolerance]
                                         - Show records close to a value
       sensor around <entity_id> <value> [tolerance] [window]
@@ -68,6 +69,7 @@ def build_completer(entity_ids: Iterable[str]) -> NestedCompleter:
         "delete": entity_completer,
         "values": entity_completer,
         "raw": entity_completer,
+        "inspect": entity_completer,
         "around": entity_completer,
         "find_value": entity_completer,
         "find": entity_completer,
@@ -202,6 +204,7 @@ class RecorderCli:
             "find": lambda: self._sensor_find(args),
             "values": lambda: self._sensor_values(args),
             "raw": lambda: self._sensor_raw(args),
+            "inspect": lambda: self._sensor_inspect(args),
             "around": lambda: self._sensor_around(args),
             "find_value": lambda: self._sensor_find_value(args),
             "delete": lambda: self._sensor_delete(args),
@@ -247,13 +250,33 @@ class RecorderCli:
         if entity_id is None:
             return
 
-        values = self._fixer.get_unique_values(entity_id)
-        if not values:
+        summaries = self._fixer.get_value_statistics(entity_id)
+        if not summaries:
             print(f"No values found for sensor '{entity_id}'.")
             return
 
-        for value in values:
-            print(f"  {value}")
+        total = sum(summary.count for summary in summaries)
+        print(f"Found {len(summaries)} unique value(s) across {total} row(s).\n")
+
+        header = f"{'Value':<20} {'Count':>8} {'Last seen (UTC)':>25}  Notes"
+        print(header)
+        print("-" * len(header))
+
+        for summary in summaries:
+            note_parts: list[str] = []
+            if self._is_placeholder_state(summary.state):
+                note_parts.append("placeholder")
+
+            last_seen = self._format_summary_timestamp(summary.last_seen, summary.last_seen_ts)
+
+            notes = ", ".join(note_parts)
+            print(
+                f"{summary.state:<20.20} {summary.count:>8} {last_seen:>25}  {notes}"
+            )
+
+        print(
+            f"\nTip: use 'sensor inspect {entity_id}' to view metadata and recent entries."
+        )
 
     def _sensor_raw(self, args: list[str]) -> None:
         entity_id = self._require_entity_id(args, usage="sensor raw <entity_id>")
@@ -271,6 +294,59 @@ class RecorderCli:
                 f"{self._format_timestamp(row)} → {row['state']} "
                 f"(id: {row['state_id']})"
             )
+
+    def _sensor_inspect(self, args: list[str]) -> None:
+        entity_id = self._require_entity_id(args, usage="sensor inspect <entity_id>")
+        if entity_id is None:
+            return
+
+        metadata_id = self._fixer.get_metadata_id(entity_id)
+        if metadata_id is None:
+            print(f"Sensor '{entity_id}' not found.")
+            return
+
+        statistics_id = self._fixer.get_statistic_id(entity_id)
+        summaries = self._fixer.get_value_statistics(entity_id)
+        recent_rows = self._fixer.get_raw_states(entity_id, limit=5)
+
+        total_rows = sum(summary.count for summary in summaries)
+        placeholder_rows = sum(
+            summary.count for summary in summaries if self._is_placeholder_state(summary.state)
+        )
+
+        print(f"Sensor: {entity_id}")
+        print(f"  metadata_id: {metadata_id}")
+        if statistics_id is None:
+            print("  statistics metadata: not available")
+        else:
+            print(f"  statistics metadata: {statistics_id}")
+        print(f"  total rows: {total_rows}")
+        if placeholder_rows:
+            print(f"  placeholder rows: {placeholder_rows}")
+
+        if summaries:
+            print("\nMost common values:")
+            for summary in summaries[:5]:
+                last_seen = self._format_summary_timestamp(
+                    summary.last_seen, summary.last_seen_ts
+                )
+                label = "placeholder" if self._is_placeholder_state(summary.state) else ""
+                label = f" ({label})" if label else ""
+                print(
+                    f"  {summary.state} → {summary.count} row(s), last seen {last_seen}{label}"
+                )
+
+        if recent_rows:
+            print("\nRecent entries:")
+            for row in recent_rows:
+                print(
+                    f"  {self._format_timestamp(row)} → {row['state']} (id: {row['state_id']})"
+                )
+
+        print(
+            "\nNext steps: use 'sensor values {entity_id}' to review all values or "
+            "'sensor delete {entity_id} <value>' to remove a specific reading."
+        )
 
     def _sensor_find_value(self, args: list[str]) -> None:
         if len(args) < 3:
@@ -519,7 +595,46 @@ class RecorderCli:
         return args[1]
 
     @staticmethod
-    def _format_timestamp(row) -> str:
+    def _format_datetime(value: object) -> str:
+        """Render recorder timestamps in a human-friendly format."""
+
+        if value is None:
+            return "unknown"
+
+        dt: datetime | None = None
+
+        if isinstance(value, datetime):
+            dt = value
+        elif isinstance(value, (int, float)):
+            try:
+                dt = datetime.fromtimestamp(float(value), tz=timezone.utc)
+            except (ValueError, OSError, OverflowError):
+                return str(value)
+        elif isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return "unknown"
+
+            # Normalise Zulu suffix before attempting ISO parsing.
+            normalised = text.replace("Z", "+00:00")
+            try:
+                dt = datetime.fromisoformat(normalised)
+            except ValueError:
+                try:
+                    dt = datetime.fromtimestamp(float(text), tz=timezone.utc)
+                except (ValueError, OSError, OverflowError):
+                    return text
+        else:
+            return str(value)
+
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+
+        dt = dt.astimezone(timezone.utc)
+        return dt.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+    @classmethod
+    def _format_timestamp(cls, row) -> str:
         value = None
         try:
             value = row["last_updated"]
@@ -527,7 +642,7 @@ class RecorderCli:
             pass
 
         if value:
-            return str(value)
+            return cls._format_datetime(value)
 
         timestamp = None
         try:
@@ -535,13 +650,16 @@ class RecorderCli:
         except (KeyError, TypeError):
             pass
 
-        if timestamp is None:
-            return "unknown"
+        return cls._format_datetime(timestamp)
 
-        try:
-            return datetime.fromtimestamp(float(timestamp), tz=timezone.utc).isoformat()
-        except (TypeError, ValueError, OSError):
-            return str(timestamp)
+    @classmethod
+    def _format_summary_timestamp(
+        cls, last_updated: str | None, last_updated_ts: float | None
+    ) -> str:
+        if last_updated:
+            return cls._format_datetime(last_updated)
+
+        return cls._format_datetime(last_updated_ts)
 
 
 def prompt_for_database_path(default_path: Path = DEFAULT_DB_PATH) -> Path | None:
