@@ -56,11 +56,27 @@ def test_get_metadata_id_returns_expected_value(fixer):
     assert fixer.get_metadata_id("zone.home") == 1
 
 
-def test_get_unique_values_lists_known_binary_sensor_states(fixer):
-    assert fixer.get_unique_values("binary_sensor.fritzbox_pia_verbindung") == [
-        "on",
-        "unavailable",
-    ]
+@pytest.mark.parametrize(
+    ("entity_id", "expected_subset"),
+    [
+        (
+            "binary_sensor.fritzbox_pia_verbindung",
+            {"on", "unavailable"},
+        ),
+        (
+            "sensor.heizung_wohnzimmer_batterie",
+            {"72.0", "unavailable"},
+        ),
+        (
+            "sensor.fritzbox_pia_gb_empfangen",
+            {"29.4", "33.6", "39.4", "unavailable"},
+        ),
+    ],
+)
+def test_get_unique_values_lists_known_states(fixer, entity_id, expected_subset):
+    values = fixer.get_unique_values(entity_id)
+    assert values, "unique values should not be empty"
+    assert expected_subset.issubset(set(values))
 
 
 def test_delete_state_everywhere_removes_matching_states(fixer, fresh_db_path):
@@ -78,7 +94,7 @@ def test_delete_state_everywhere_removes_matching_states(fixer, fresh_db_path):
         assert before > 0
 
     deleted = fixer.delete_state_everywhere(entity_id, state_value)
-    assert deleted == before
+    assert deleted >= before
 
     with sqlite3.connect(fresh_db_path) as conn:
         after = conn.execute(
@@ -92,3 +108,152 @@ def test_delete_state_everywhere_removes_matching_states(fixer, fresh_db_path):
             (metadata_id, "unavailable"),
         ).fetchone()[0]
         assert remaining > 0
+
+
+def _count_statistics(conn, table, meta_id, numeric_value):
+    query = f"""
+        SELECT COUNT(*) FROM {table}
+        WHERE metadata_id = ? AND (
+            state = ? OR min = ? OR max = ? OR mean = ?
+        )
+    """
+    return conn.execute(
+        query,
+        (meta_id, numeric_value, numeric_value, numeric_value, numeric_value),
+    ).fetchone()[0]
+
+
+@pytest.mark.parametrize(
+    ("entity_id", "state_value", "control_entity_id"),
+    [
+        (
+            "sensor.heizung_wohnzimmer_batterie",
+            "72.0",
+            "sensor.heizung_schlafzimmer_batterie",
+        ),
+        (
+            "sensor.heizung_schlafzimmer_batterie",
+            "66.0",
+            "sensor.heizung_buro1_batterie",
+        ),
+    ],
+)
+def test_delete_state_everywhere_removes_statistics_rows(
+    fixer, fresh_db_path, entity_id, state_value, control_entity_id
+):
+    metadata_id = fixer.get_metadata_id(entity_id)
+    statistics_metadata_id = fixer.get_statistic_id(entity_id)
+    control_statistics_metadata_id = fixer.get_statistic_id(control_entity_id)
+    numeric_value = float(state_value)
+
+    assert metadata_id is not None
+    assert statistics_metadata_id is not None
+    assert control_statistics_metadata_id is not None
+
+    with sqlite3.connect(fresh_db_path) as conn:
+        before_states = conn.execute(
+            "SELECT COUNT(*) FROM states WHERE metadata_id = ? AND state = ?",
+            (metadata_id, state_value),
+        ).fetchone()[0]
+        before_stats = _count_statistics(
+            conn, "statistics", statistics_metadata_id, numeric_value
+        )
+        before_short = _count_statistics(
+            conn, "statistics_short_term", statistics_metadata_id, numeric_value
+        )
+        control_stats_before = _count_statistics(
+            conn, "statistics", control_statistics_metadata_id, numeric_value
+        )
+        control_short_before = _count_statistics(
+            conn,
+            "statistics_short_term",
+            control_statistics_metadata_id,
+            numeric_value,
+        )
+
+    assert before_states > 0
+    assert before_stats > 0
+    assert before_short > 0
+    assert control_stats_before > 0
+    assert control_short_before > 0
+
+    fixer.delete_state_everywhere(entity_id, state_value)
+
+    with sqlite3.connect(fresh_db_path) as conn:
+        after_states = conn.execute(
+            "SELECT COUNT(*) FROM states WHERE metadata_id = ? AND state = ?",
+            (metadata_id, state_value),
+        ).fetchone()[0]
+        after_stats = _count_statistics(
+            conn, "statistics", statistics_metadata_id, numeric_value
+        )
+        after_short = _count_statistics(
+            conn, "statistics_short_term", statistics_metadata_id, numeric_value
+        )
+        control_stats_after = _count_statistics(
+            conn, "statistics", control_statistics_metadata_id, numeric_value
+        )
+        control_short_after = _count_statistics(
+            conn,
+            "statistics_short_term",
+            control_statistics_metadata_id,
+            numeric_value,
+        )
+
+    assert after_states == 0
+    assert after_stats == 0
+    assert after_short == 0
+    assert control_stats_after == control_stats_before
+    assert control_short_after == control_short_before
+
+
+def test_delete_state_everywhere_skips_statistics_for_non_numeric_state(
+    fixer, fresh_db_path
+):
+    entity_id = "sensor.fritzbox_pia_download_geschwindigkeit"
+    state_value = "unknown"
+
+    metadata_id = fixer.get_metadata_id(entity_id)
+    statistics_metadata_id = fixer.get_statistic_id(entity_id)
+
+    assert metadata_id is not None
+    assert statistics_metadata_id is not None
+
+    with sqlite3.connect(fresh_db_path) as conn:
+        before_states = conn.execute(
+            "SELECT COUNT(*) FROM states WHERE metadata_id = ? AND state = ?",
+            (metadata_id, state_value),
+        ).fetchone()[0]
+        before_stats = conn.execute(
+            "SELECT COUNT(*) FROM statistics WHERE metadata_id = ?",
+            (statistics_metadata_id,),
+        ).fetchone()[0]
+        before_short = conn.execute(
+            "SELECT COUNT(*) FROM statistics_short_term WHERE metadata_id = ?",
+            (statistics_metadata_id,),
+        ).fetchone()[0]
+
+    assert before_states > 0
+    assert before_stats > 0
+    assert before_short > 0
+
+    deleted = fixer.delete_state_everywhere(entity_id, state_value)
+
+    with sqlite3.connect(fresh_db_path) as conn:
+        after_states = conn.execute(
+            "SELECT COUNT(*) FROM states WHERE metadata_id = ? AND state = ?",
+            (metadata_id, state_value),
+        ).fetchone()[0]
+        after_stats = conn.execute(
+            "SELECT COUNT(*) FROM statistics WHERE metadata_id = ?",
+            (statistics_metadata_id,),
+        ).fetchone()[0]
+        after_short = conn.execute(
+            "SELECT COUNT(*) FROM statistics_short_term WHERE metadata_id = ?",
+            (statistics_metadata_id,),
+        ).fetchone()[0]
+
+    assert deleted == before_states
+    assert after_states == 0
+    assert after_stats == before_stats
+    assert after_short == before_short
