@@ -78,6 +78,7 @@ Enter path to HA database or press ENTER key for confirm default `/config/home-a
 | `sensor values <entity_id>`              | List all unique values stored for the sensor. |
 | `sensor raw <entity_id>`                 | Show 200 recent raw `states` records. |
 | `sensor delete <entity_id> <value>`      | Completely delete value from `states`, `statistics`, and `statistics_short_term`. |
+| `sensor delete_id <entity_id> <state_id>`| Preview nearby rows and confirm before deleting a single `states` entry by `state_id`. |
 
 ---
 

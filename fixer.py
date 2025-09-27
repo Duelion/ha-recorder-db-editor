@@ -167,6 +167,25 @@ class RecorderFixer:
             self.conn.rollback()
             raise
 
+    def delete_state_by_id(self, entity_id: str, state_id: int) -> bool:
+        """Delete a single ``states`` row identified by ``state_id``."""
+
+        metadata_id = self.get_metadata_id(entity_id)
+        if metadata_id is None:
+            return False
+
+        try:
+            deleted_rows = self._execute_delete(
+                "DELETE FROM states WHERE metadata_id = ? AND state_id = ?",
+                (metadata_id, state_id),
+            )
+            self.conn.commit()
+        except sqlite3.DatabaseError:
+            self.conn.rollback()
+            raise
+
+        return deleted_rows > 0
+
     def list_all_sensors(self):
         cur = self.conn.execute(
             "SELECT entity_id, metadata_id FROM states_meta ORDER BY entity_id"
