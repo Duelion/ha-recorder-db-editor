@@ -22,8 +22,10 @@ RUN mkdir -p /etc/dropbear
 # Remove existing debug user if exists
 RUN userdel debug || true
 
-# Create dedicated non-root debug user
-RUN useradd -m -d /home/debug -s /bin/bash debug && \
+# Create debug user that retains root privileges (UID=0)
+# This matches the upstream behaviour and ensures the CLI can modify
+# databases stored under /config, which are typically owned by root.
+RUN useradd -m -d /home/debug -s /bin/bash -o -u 0 debug && \
     passwd -l debug
 
 # Copy the shell autostart script for debug
@@ -34,7 +36,7 @@ RUN chmod +x /usr/local/bin/start_recorder_shell.sh
 RUN grep -qxF 'if [ "$USER" = "debug" ]; then exec /usr/local/bin/start_recorder_shell.sh; fi' /home/debug/.bashrc || \
     echo 'if [ "$USER" = "debug" ]; then exec /usr/local/bin/start_recorder_shell.sh; fi' >> /home/debug/.bashrc
 RUN chown -R debug:debug /home/debug && \
-    chmod 750 /home/debug
+    chmod 755 /home/debug
 
 # Copy the program scripts into the container
 COPY fixer.py cli.py /recorder_fixer/
