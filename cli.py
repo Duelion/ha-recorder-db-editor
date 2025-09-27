@@ -52,6 +52,7 @@ HELP_TEXT = textwrap.dedent(
       sensor around <entity_id> <value> [tolerance] [window]
                                         - Show nearby records for candidate values
       sensor delete <entity_id> <value>  - Delete entries with specific state value
+      sensor delete_id <entity_id> <id>  - Delete single state row by ``state_id``
 
       password                           - Change password for user 'debug'
       clear                              - Clear the screen
@@ -67,6 +68,7 @@ def build_completer(entity_ids: Iterable[str]) -> NestedCompleter:
     entity_completer = {entity_id: None for entity_id in entity_ids}
     sensor_completer = {
         "delete": entity_completer,
+        "delete_id": entity_completer,
         "values": entity_completer,
         "raw": entity_completer,
         "inspect": entity_completer,
@@ -208,6 +210,7 @@ class RecorderCli:
             "around": lambda: self._sensor_around(args),
             "find_value": lambda: self._sensor_find_value(args),
             "delete": lambda: self._sensor_delete(args),
+            "delete_id": lambda: self._sensor_delete_by_id(args),
         }
 
         handler = dispatch.get(subcommand)
@@ -584,6 +587,72 @@ class RecorderCli:
             )
 
         self._refresh_entity_ids()
+
+    def _sensor_delete_by_id(self, args: list[str]) -> None:
+        if len(args) != 3:
+            print("Usage: sensor delete_id <entity_id> <state_id>")
+            return
+
+        entity_id = args[1]
+
+        try:
+            state_id = int(args[2])
+        except ValueError:
+            print("state_id must be an integer value.")
+            return
+
+        if self._fixer.get_metadata_id(entity_id) is None:
+            print(f"Sensor '{entity_id}' not found.")
+            return
+
+        before_rows, anchor, after_rows = self._fixer.get_state_context(
+            entity_id, state_id, before=3, after=3
+        )
+
+        if anchor is None:
+            print(
+                f"No record matched entity '{entity_id}' with state_id {state_id}."
+            )
+            return
+
+        print(f"Context around state_id {state_id} for '{entity_id}':")
+
+        def _render_row(prefix: str, row) -> None:
+            timestamp = self._format_timestamp(row)
+            print(
+                f"  {prefix} {timestamp} → {row['state']}"
+                f" (id: {row['state_id']})"
+            )
+
+        for row in before_rows:
+            _render_row("↑", row)
+
+        _render_row("•", anchor)
+
+        for row in after_rows:
+            _render_row("↓", row)
+
+        try:
+            confirmation = self._session.prompt(
+                "Type 'delete' to confirm removal (press Enter to cancel): ",
+                completer=None,
+            )
+        except (KeyboardInterrupt, EOFError):
+            print("\nDeletion cancelled.")
+            return
+
+        if confirmation.strip().lower() != "delete":
+            print("Deletion cancelled.")
+            return
+
+        deleted = self._fixer.delete_state_by_id(entity_id, state_id)
+        if not deleted:
+            print(
+                "The target row was not deleted (it may have already been removed)."
+            )
+            return
+
+        print("Deleted 1 row from states.")
 
     # ------------------------------------------------------------------
     # helpers

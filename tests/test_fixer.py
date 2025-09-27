@@ -165,7 +165,7 @@ def test_delete_state_everywhere_removes_matching_states(fixer, fresh_db_path):
             "SELECT COUNT(*) FROM states WHERE metadata_id = ? AND state = ?",
             (metadata_id, "unavailable"),
         ).fetchone()[0]
-        assert remaining > 0
+    assert remaining > 0
 
 
 def _count_statistics(conn, table, meta_id, numeric_value):
@@ -320,3 +320,47 @@ def test_delete_state_everywhere_skips_statistics_for_non_numeric_state(
     assert after_states == 0
     assert after_stats == before_stats
     assert after_short == before_short
+
+
+def test_delete_state_by_id_removes_single_row(fixer, fresh_db_path):
+    entity_id = "sensor.fritzbox_pia_gb_empfangen"
+    rows = fixer.get_raw_states(entity_id, limit=10)
+
+    assert rows, "expected raw states for the sensor"
+
+    target = rows[0]
+    target_state_id = target["state_id"]
+    target_state_value = target["state"]
+
+    metadata_id = fixer.get_metadata_id(entity_id)
+    assert metadata_id is not None
+
+    with sqlite3.connect(fresh_db_path) as conn:
+        before_exact = conn.execute(
+            "SELECT COUNT(*) FROM states WHERE state_id = ?",
+            (target_state_id,),
+        ).fetchone()[0]
+        before_value = conn.execute(
+            "SELECT COUNT(*) FROM states WHERE metadata_id = ? AND state = ?",
+            (metadata_id, target_state_value),
+        ).fetchone()[0]
+
+    assert before_exact == 1
+    assert before_value >= 1
+
+    assert fixer.delete_state_by_id(entity_id, target_state_id) is True
+
+    with sqlite3.connect(fresh_db_path) as conn:
+        after_exact = conn.execute(
+            "SELECT COUNT(*) FROM states WHERE state_id = ?",
+            (target_state_id,),
+        ).fetchone()[0]
+        after_value = conn.execute(
+            "SELECT COUNT(*) FROM states WHERE metadata_id = ? AND state = ?",
+            (metadata_id, target_state_value),
+        ).fetchone()[0]
+
+    assert after_exact == 0
+    assert after_value == before_value - 1
+
+    assert fixer.delete_state_by_id(entity_id, target_state_id) is False
