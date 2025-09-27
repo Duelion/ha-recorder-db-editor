@@ -573,18 +573,66 @@ class RecorderCli:
             print(f"Sensor '{entity_id}' not found.")
             return
 
-        summary: DeletionSummary = self._fixer.delete_state_everywhere(entity_id, value)
-        if summary.total == 0:
+        preview = self._fixer.get_state_deletion_preview(entity_id, value)
+        if preview is None or preview.total == 0:
             print(
                 f"No records matched entity '{entity_id}' with state '{value}'."
             )
-        else:
-            print(
-                "Deleted "
-                f"{summary.states} from states, "
-                f"{summary.statistics} from statistics, "
-                f"{summary.statistics_short_term} from statistics_short_term."
+            return
+
+        print(f"Planned deletion summary for '{entity_id}' = '{value}':")
+        print(f"  • states rows: {preview.states_count}")
+
+        if preview.states_count:
+            first_seen = self._format_summary_timestamp(
+                preview.first_seen, preview.first_seen_ts
             )
+            last_seen = self._format_summary_timestamp(
+                preview.last_seen, preview.last_seen_ts
+            )
+            print(f"    first seen: {first_seen}")
+            print(f"    last seen:  {last_seen}")
+
+        print(f"  • statistics rows: {preview.statistics_count}")
+        print(
+            "  • statistics_short_term rows: "
+            f"{preview.statistics_short_term_count}"
+        )
+
+        if preview.examples:
+            print("Sample states to be removed (most recent first):")
+
+            for row in preview.examples:
+                timestamp = self._format_timestamp(row)
+                print(
+                    f"    - {timestamp} → {row['state']}"
+                    f" (id: {row['state_id']})"
+                )
+
+        try:
+            confirmation = self._session.prompt(
+                "Type 'delete' to confirm removal of all matching rows "
+                "(press Enter to cancel): ",
+                completer=None,
+            )
+        except (KeyboardInterrupt, EOFError):
+            print("\nDeletion cancelled.")
+            return
+
+        if confirmation.strip().lower() != "delete":
+            print("Deletion cancelled.")
+            return
+
+        summary: DeletionSummary = self._fixer.delete_state_everywhere(
+            entity_id, value
+        )
+
+        print(
+            "Deleted "
+            f"{summary.states} from states, "
+            f"{summary.statistics} from statistics, "
+            f"{summary.statistics_short_term} from statistics_short_term."
+        )
 
         self._refresh_entity_ids()
 
