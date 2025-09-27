@@ -25,6 +25,18 @@ class DeletionSummary:
         return self.states + self.statistics + self.statistics_short_term
 
 
+@dataclass(frozen=True)
+class ValueStatistics:
+    """Aggregated information for a sensor state value."""
+
+    state: str
+    count: int
+    first_seen_ts: float | None
+    last_seen_ts: float | None
+    first_seen: str | None
+    last_seen: str | None
+
+
 class RecorderFixer:
     """Convenience wrapper around the Home Assistant recorder database."""
 
@@ -170,6 +182,45 @@ class RecorderFixer:
             (metadata_id,),
         )
         return [row["state"] for row in cur.fetchall()]
+
+    def get_value_statistics(self, entity_id: str) -> list[ValueStatistics]:
+        """Return grouped statistics for all values of ``entity_id``."""
+
+        metadata_id = self.get_metadata_id(entity_id)
+        if metadata_id is None:
+            return []
+
+        cursor = self.conn.execute(
+            """
+            SELECT
+                state,
+                COUNT(*) AS count,
+                MIN(last_updated_ts) AS first_seen_ts,
+                MAX(last_updated_ts) AS last_seen_ts,
+                MIN(last_updated) AS first_seen,
+                MAX(last_updated) AS last_seen
+            FROM states
+            WHERE metadata_id = ?
+            GROUP BY state
+            ORDER BY count DESC, state ASC
+            """,
+            (metadata_id,),
+        )
+
+        stats: list[ValueStatistics] = []
+        for row in cursor.fetchall():
+            stats.append(
+                ValueStatistics(
+                    state=row["state"],
+                    count=int(row["count"]),
+                    first_seen_ts=float(row["first_seen_ts"]) if row["first_seen_ts"] is not None else None,
+                    last_seen_ts=float(row["last_seen_ts"]) if row["last_seen_ts"] is not None else None,
+                    first_seen=row["first_seen"],
+                    last_seen=row["last_seen"],
+                )
+            )
+
+        return stats
 
     def get_raw_states(self, entity_id: str, limit: int = 200):
         metadata_id = self.get_metadata_id(entity_id)

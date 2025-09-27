@@ -74,6 +74,18 @@ def test_get_unique_values_lists_known_states(fixer, entity_id, expected_subset)
     assert expected_subset.issubset(set(values))
 
 
+def test_get_value_statistics_returns_counts_and_ordering(fixer):
+    stats = fixer.get_value_statistics("binary_sensor.fritzbox_pia_verbindung")
+
+    assert stats, "expected aggregated statistics for sensor"
+    assert stats[0].state in {"on", "unavailable"}
+    # Ensure counts sum to the same length as unique values
+    total_rows = sum(item.count for item in stats)
+    assert total_rows > 0
+    assert all(item.count >= stats[index + 1].count for index, item in enumerate(stats[:-1]))
+    assert any(item.last_seen_ts is not None or item.last_seen for item in stats)
+
+
 def test_find_states_for_value_returns_exact_matches(fixer):
     rows = fixer.find_states_for_value(
         "binary_sensor.fritzbox_pia_verbindung",
