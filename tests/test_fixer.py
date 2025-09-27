@@ -34,6 +34,7 @@ def _download_dataset(destination: Path) -> None:
         pytest.skip(f"Unable to download recorder dataset from {url_or_path}: {exc}")
 
 
+
 @pytest.fixture
 def fresh_db_path(tmp_path):
     """Download a fresh recorder DB for every test run."""
