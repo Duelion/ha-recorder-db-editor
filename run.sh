@@ -42,7 +42,12 @@ if [ "$SSH_ENABLED" = "true" ]; then
         echo "[INFO] SSH debug shell enabled"
         echo "debug:${CONFIGURED_PASSWORD}" | chpasswd
         unset CONFIGURED_PASSWORD DEBUG_PASSWORD
-        /usr/sbin/dropbear -E -w -p "$SSH_PORT" &
+        # The debug user intentionally runs with UID 0 so it can manage
+        # recorder files owned by root.  Dropbear's "-w" flag forbids any
+        # UID 0 password logins, which would also block the debug account.
+        # Avoid that flag so the debug shell remains accessible while the
+        # root account itself stays locked.
+        /usr/sbin/dropbear -E -p "$SSH_PORT" &
     fi
 else
     echo "[INFO] SSH debug shell is disabled"
