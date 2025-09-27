@@ -5,7 +5,24 @@ from __future__ import annotations
 import math
 import os
 import sqlite3
-from typing import Iterable, List, Optional
+from collections.abc import Iterable
+from dataclasses import dataclass
+from types import TracebackType
+
+
+@dataclass(frozen=True)
+class DeletionSummary:
+    """Summary of rows removed from the recorder database."""
+
+    states: int = 0
+    statistics: int = 0
+    statistics_short_term: int = 0
+
+    @property
+    def total(self) -> int:
+        """Return the total number of deleted rows across all tables."""
+
+        return self.states + self.statistics + self.statistics_short_term
 
 
 class RecorderFixer:
@@ -18,13 +35,18 @@ class RecorderFixer:
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
 
-    def __enter__(self) -> "RecorderFixer":
+    def __enter__(self) -> RecorderFixer:
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[override]
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
         self.close()
 
-    def get_metadata_id(self, entity_id: str) -> Optional[int]:
+    def get_metadata_id(self, entity_id: str) -> int | None:
         """Return the ``states_meta.metadata_id`` for the given entity."""
 
         cur = self.conn.execute(
@@ -34,7 +56,7 @@ class RecorderFixer:
         row = cur.fetchone()
         return row["metadata_id"] if row else None
 
-    def get_statistic_id(self, entity_id: str) -> Optional[int]:
+    def get_statistic_id(self, entity_id: str) -> int | None:
         """Return the ``statistics_meta.id`` for the given entity."""
 
         cur = self.conn.execute(
@@ -51,7 +73,7 @@ class RecorderFixer:
         return cursor.rowcount
 
     @staticmethod
-    def _coerce_state_to_float(state_value: str) -> Optional[float]:
+    def _coerce_state_to_float(state_value: str) -> float | None:
         """Convert a state value to ``float`` if possible."""
 
         try:
@@ -61,7 +83,7 @@ class RecorderFixer:
 
         return value if math.isfinite(value) else None
 
-    def delete_state_everywhere(self, entity_id: str, state_value: str) -> int:
+    def delete_state_everywhere(self, entity_id: str, state_value: str) -> DeletionSummary:
         """Remove matching state rows from recorder tables.
 
         The method deletes rows from ``states``, ``statistics`` and
@@ -73,18 +95,15 @@ class RecorderFixer:
 
         metadata_id = self.get_metadata_id(entity_id)
         if metadata_id is None:
-            print(f"Sensor '{entity_id}' not found in states_meta.")
-            return 0
+            return DeletionSummary()
 
         statistics_metadata_id = self.get_statistic_id(entity_id)
-        total_deleted = 0
 
         try:
             deleted_states = self._execute_delete(
                 "DELETE FROM states WHERE metadata_id = ? AND state = ?",
                 (metadata_id, state_value),
             )
-            total_deleted += deleted_states
 
             deleted_stats = 0
             deleted_short = 0
@@ -107,7 +126,6 @@ class RecorderFixer:
                         numeric_value,
                     ),
                 )
-                total_deleted += deleted_stats
 
                 deleted_short = self._execute_delete(
                     """
@@ -124,21 +142,18 @@ class RecorderFixer:
                         numeric_value,
                     ),
                 )
-                total_deleted += deleted_short
 
             self.conn.commit()
 
-            print(f"Deleted {deleted_states} records from 'states'")
-            print(f"Deleted {deleted_stats} records from 'statistics'")
-            print(f"Deleted {deleted_short} records from 'statistics_short_term'")
-            print(f"Total deleted records: {total_deleted}")
+            return DeletionSummary(
+                states=deleted_states,
+                statistics=deleted_stats,
+                statistics_short_term=deleted_short,
+            )
 
-            return total_deleted
-
-        except sqlite3.DatabaseError as exc:
-            print(f"Database error during deletion: {exc}")
+        except sqlite3.DatabaseError:
             self.conn.rollback()
-            return 0
+            raise
 
     def list_all_sensors(self):
         cur = self.conn.execute(
@@ -146,7 +161,7 @@ class RecorderFixer:
         )
         return cur.fetchall()
 
-    def get_unique_values(self, entity_id: str) -> List[str]:
+    def get_unique_values(self, entity_id: str) -> list[str]:
         metadata_id = self.get_metadata_id(entity_id)
         if metadata_id is None:
             return []

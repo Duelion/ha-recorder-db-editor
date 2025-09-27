@@ -129,6 +129,18 @@ Deleted 2 entries from statistics_short_term.
 
 ---
 
+## 🛠️ Development
+
+Install the development dependencies and run the linters/tests before opening a pull request:
+
+```bash
+pip install -r requirements-dev.txt
+ruff check
+pytest
+```
+
+---
+
 ## 🧪 Tested On
 
 - Home Assistant Core 2024.6+

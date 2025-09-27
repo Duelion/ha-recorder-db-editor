@@ -1,16 +1,11 @@
 import os
 import shutil
 import sqlite3
-import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 import pytest
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 from fixer import RecorderFixer
 
@@ -94,7 +89,7 @@ def test_delete_state_everywhere_removes_matching_states(fixer, fresh_db_path):
         assert before > 0
 
     deleted = fixer.delete_state_everywhere(entity_id, state_value)
-    assert deleted >= before
+    assert deleted.total >= before
 
     with sqlite3.connect(fresh_db_path) as conn:
         after = conn.execute(
@@ -177,7 +172,7 @@ def test_delete_state_everywhere_removes_statistics_rows(
     assert control_stats_before > 0
     assert control_short_before > 0
 
-    fixer.delete_state_everywhere(entity_id, state_value)
+    summary = fixer.delete_state_everywhere(entity_id, state_value)
 
     with sqlite3.connect(fresh_db_path) as conn:
         after_states = conn.execute(
@@ -203,6 +198,9 @@ def test_delete_state_everywhere_removes_statistics_rows(
     assert after_states == 0
     assert after_stats == 0
     assert after_short == 0
+    assert summary.states == before_states
+    assert summary.statistics == before_stats
+    assert summary.statistics_short_term == before_short
     assert control_stats_after == control_stats_before
     assert control_short_after == control_short_before
 
@@ -253,7 +251,9 @@ def test_delete_state_everywhere_skips_statistics_for_non_numeric_state(
             (statistics_metadata_id,),
         ).fetchone()[0]
 
-    assert deleted == before_states
+    assert deleted.states == before_states
+    assert deleted.statistics == 0
+    assert deleted.statistics_short_term == 0
     assert after_states == 0
     assert after_stats == before_stats
     assert after_short == before_short
