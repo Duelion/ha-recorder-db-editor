@@ -2,6 +2,8 @@ import os
 import shutil
 import sqlite3
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -12,23 +14,33 @@ if str(ROOT) not in sys.path:
 
 from fixer import RecorderFixer
 
-_DEFAULT_DB = Path(__file__).resolve().parent / "data" / "home-assistant_v2.db"
-TEST_DB = Path(os.environ.get("RECORDER_FIXER_TEST_DB", _DEFAULT_DB))
+DEFAULT_DATASET_URL = (
+    "https://github.com/pia2209/config/raw/refs/heads/main/home-assistant_v2.db"
+)
 
-if not TEST_DB.exists():
-    pytest.skip(
-        "Recorder test database not found. Download the dataset into tests/data/ "
-        "or set RECORDER_FIXER_TEST_DB to an existing recorder DB file.",
-        allow_module_level=True,
-    )
+
+def _download_dataset(destination: Path) -> None:
+    url_or_path = os.environ.get("RECORDER_FIXER_TEST_DB_URL", DEFAULT_DATASET_URL)
+    candidate_path = Path(url_or_path)
+
+    if candidate_path.exists():
+        shutil.copy(candidate_path, destination)
+        return
+
+    try:
+        with urllib.request.urlopen(url_or_path) as response, destination.open("wb") as target:
+            shutil.copyfileobj(response, target)
+    except (urllib.error.URLError, TimeoutError) as exc:
+        pytest.skip(f"Unable to download recorder dataset from {url_or_path}: {exc}")
+
 
 
 @pytest.fixture
 def fresh_db_path(tmp_path):
-    """Copy the recorder DB so every test starts from a clean slate."""
-    db_copy = tmp_path / "home-assistant_v2.db"
-    shutil.copy(TEST_DB, db_copy)
-    return db_copy
+    """Download a fresh recorder DB for every test run."""
+    db_path = tmp_path / "home-assistant_v2.db"
+    _download_dataset(db_path)
+    return db_path
 
 
 @pytest.fixture

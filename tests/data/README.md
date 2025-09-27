@@ -1,11 +1,9 @@
 # Test Data Overview
 
-This directory contains Home Assistant recorder databases that can be used to manually test the editor CLI. No datasets are committed to the repository so you can bring your own sample without bloating the history with large binaries.
+This directory can host Home Assistant recorder databases that you want to inspect manually while working on the editor CLI. No datasets are committed to the repository so you can bring your own sample without bloating the history with large binaries.
 
-## Adding `home-assistant_v2.db`
+## Using the automated test dataset
 
-1. Download the recorder database from [`pia2209/config`](https://github.com/pia2209/config/raw/refs/heads/main/home-assistant_v2.db).
-2. Place the file in this directory so it sits alongside this README (`tests/data/home-assistant_v2.db`).
-3. Re-run the test suite. The pytest module automatically copies the database into a temporary directory for each test to keep the original pristine.
+The pytest suite downloads a fresh copy of [`home-assistant_v2.db`](https://github.com/pia2209/config/raw/refs/heads/main/home-assistant_v2.db) for every test. Nothing needs to be checked into the repository and each test starts from a pristine database.
 
-If you prefer to keep the dataset elsewhere, set the `RECORDER_FIXER_TEST_DB` environment variable to an absolute path before invoking pytest.
+If you want to override the dataset source, set the `RECORDER_FIXER_TEST_DB_URL` environment variable to a custom URL or an absolute path to a local recorder database before invoking pytest.
