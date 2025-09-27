@@ -74,6 +74,57 @@ def test_get_unique_values_lists_known_states(fixer, entity_id, expected_subset)
     assert expected_subset.issubset(set(values))
 
 
+def test_find_states_for_value_returns_exact_matches(fixer):
+    rows = fixer.find_states_for_value(
+        "binary_sensor.fritzbox_pia_verbindung",
+        "unavailable",
+    )
+
+    assert rows, "expected to find at least one unavailable state"
+    assert all(row["state"] == "unavailable" for row in rows)
+    assert "last_updated_ts" in rows[0].keys()
+
+
+def test_find_states_for_value_accepts_float_tolerance(fixer):
+    rows = fixer.find_states_for_value(
+        "sensor.fritzbox_pia_gb_empfangen",
+        "30.3004",
+        tolerance=0.01,
+    )
+
+    assert rows, "expected to find states close to 30.3004"
+    assert any(row["state"] == "30.3" for row in rows)
+
+
+def test_get_state_context_returns_neighbors(fixer):
+    rows = fixer.find_states_for_value(
+        "sensor.fritzbox_pia_gb_empfangen",
+        "30.3004",
+        tolerance=0.02,
+    )
+
+    assert rows, "expected candidate states for context inspection"
+
+    state_id = rows[0]["state_id"]
+    before_rows, anchor, after_rows = fixer.get_state_context(
+        "sensor.fritzbox_pia_gb_empfangen",
+        state_id,
+        before=2,
+        after=2,
+    )
+
+    assert anchor is not None
+    assert anchor["state_id"] == state_id
+
+    previous_ids = [row["state_id"] for row in before_rows]
+    assert previous_ids == sorted(previous_ids)
+    assert all(row["state_id"] < state_id for row in before_rows)
+
+    following_ids = [row["state_id"] for row in after_rows]
+    assert following_ids == sorted(following_ids)
+    assert all(row["state_id"] > state_id for row in after_rows)
+
+
 def test_delete_state_everywhere_removes_matching_states(fixer, fresh_db_path):
     entity_id = "binary_sensor.fritzbox_pia_verbindung"
     state_value = "on"

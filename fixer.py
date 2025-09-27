@@ -177,10 +177,10 @@ class RecorderFixer:
             return []
         cur = self.conn.execute(
             """
-            SELECT state_id, state, last_updated
+            SELECT state_id, state, last_updated, last_updated_ts
             FROM states
             WHERE metadata_id = ?
-            ORDER BY last_updated DESC
+            ORDER BY COALESCE(last_updated_ts, 0) DESC
             LIMIT ?
             """,
             (metadata_id, limit),
@@ -190,15 +190,144 @@ class RecorderFixer:
     def list_states_by_id(self, metadata_id: int, limit: int = 200):
         cur = self.conn.execute(
             """
-            SELECT state_id, state, last_updated
+            SELECT state_id, state, last_updated, last_updated_ts
             FROM states
             WHERE metadata_id = ?
-            ORDER BY last_updated DESC
+            ORDER BY COALESCE(last_updated_ts, 0) DESC
             LIMIT ?
             """,
             (metadata_id, limit),
         )
         return cur.fetchall()
+
+    def find_states_for_value(
+        self,
+        entity_id: str,
+        state_value: str,
+        *,
+        tolerance: float = 0.01,
+        limit: int = 200,
+    ) -> list[sqlite3.Row]:
+        """Return rows whose state matches ``state_value`` (with tolerance)."""
+
+        metadata_id = self.get_metadata_id(entity_id)
+        if metadata_id is None:
+            return []
+
+        rows: list[sqlite3.Row] = []
+        seen_state_ids: set[int] = set()
+
+        cursor = self.conn.execute(
+            """
+            SELECT state_id, state, last_updated, last_updated_ts
+            FROM states
+            WHERE metadata_id = ? AND state = ?
+            ORDER BY COALESCE(last_updated_ts, 0) DESC
+            LIMIT ?
+            """,
+            (metadata_id, state_value, limit),
+        )
+        exact_matches = cursor.fetchall()
+        for row in exact_matches:
+            rows.append(row)
+            seen_state_ids.add(row["state_id"])
+
+        numeric_value = self._coerce_state_to_float(state_value)
+        tolerance = abs(tolerance)
+
+        if numeric_value is None or tolerance == 0:
+            return rows
+
+        candidate_cursor = self.conn.execute(
+            """
+            SELECT state_id, state, last_updated, last_updated_ts
+            FROM states
+            WHERE metadata_id = ?
+            ORDER BY ABS(CAST(state AS REAL) - ?), COALESCE(last_updated_ts, 0) DESC
+            LIMIT ?
+            """,
+            (metadata_id, numeric_value, limit * 3),
+        )
+
+        for row in candidate_cursor.fetchall():
+            state_id = row["state_id"]
+            if state_id in seen_state_ids:
+                continue
+
+            row_value = self._coerce_state_to_float(row["state"])
+            if row_value is None:
+                continue
+
+            if math.isfinite(row_value) and abs(row_value - numeric_value) <= tolerance:
+                rows.append(row)
+                seen_state_ids.add(state_id)
+
+            if len(rows) >= limit:
+                break
+
+        rows.sort(
+            key=lambda r: (
+                r["last_updated_ts"] if r["last_updated_ts"] is not None else 0,
+                r["last_updated"] if r["last_updated"] is not None else "",
+            ),
+            reverse=True,
+        )
+
+        return rows
+
+    def get_state_context(
+        self,
+        entity_id: str,
+        state_id: int,
+        *,
+        before: int = 2,
+        after: int = 2,
+    ) -> tuple[list[sqlite3.Row], sqlite3.Row | None, list[sqlite3.Row]]:
+        """Return rows surrounding the provided ``state_id`` for an entity."""
+
+        before = max(0, before)
+        after = max(0, after)
+
+        metadata_id = self.get_metadata_id(entity_id)
+        if metadata_id is None:
+            return ([], None, [])
+
+        anchor = self.conn.execute(
+            """
+            SELECT state_id, state, last_updated, last_updated_ts
+            FROM states
+            WHERE metadata_id = ? AND state_id = ?
+            """,
+            (metadata_id, state_id),
+        ).fetchone()
+
+        if anchor is None:
+            return ([], None, [])
+
+        before_rows = self.conn.execute(
+            """
+            SELECT state_id, state, last_updated, last_updated_ts
+            FROM states
+            WHERE metadata_id = ? AND state_id < ?
+            ORDER BY state_id DESC
+            LIMIT ?
+            """,
+            (metadata_id, state_id, before),
+        ).fetchall()
+        before_rows.reverse()
+
+        after_rows = self.conn.execute(
+            """
+            SELECT state_id, state, last_updated, last_updated_ts
+            FROM states
+            WHERE metadata_id = ? AND state_id > ?
+            ORDER BY state_id ASC
+            LIMIT ?
+            """,
+            (metadata_id, state_id, after),
+        ).fetchall()
+
+        return (before_rows, anchor, after_rows)
 
     def close(self) -> None:
         self.conn.close()
